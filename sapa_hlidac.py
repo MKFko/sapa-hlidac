@@ -134,11 +134,11 @@ $app = '{{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}}\\WindowsPowerShell\\v1.0\\power
         log(f"Windows notifikace selhala: {e}")
 
 
-def notify_ntfy(topic, title, text):
+def notify_ntfy(topic, title, text, priority=5):
     if not topic:
         return
     try:
-        payload = {"topic": topic, "title": title, "message": text, "priority": 5,
+        payload = {"topic": topic, "title": title, "message": text, "priority": priority,
                    "click": BOOKING_URL, "tags": ["ramen"]}
         req = urllib.request.Request(
             "https://ntfy.sh/",
@@ -173,15 +173,36 @@ def notify_email(cfg, title, text):
         log(f"E-mail selhal: {e}")
 
 
-def notify(config, title, text):
+def notify(config, title, text, priority=5):
     log(f"UPOZORNĚNÍ: {title} - {text}")
     if sys.platform == "win32":
         notify_windows(title, text)
-    notify_ntfy(os.environ.get("NTFY_TOPIC") or config.get("ntfy_topic", ""), title, text)
+    notify_ntfy(os.environ.get("NTFY_TOPIC") or config.get("ntfy_topic", ""), title, text, priority)
     notify_email(config.get("email", {}), title, text)
 
 
 # ---------- hlavní logika ----------
+
+def prague_now():
+    """Aktuální pražský čas (letní čas: poslední neděle v březnu až poslední neděle v říjnu, 01:00 UTC)."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    def last_sunday(month):
+        d = date(now.year, month, 31)
+        return datetime(d.year, d.month, d.day - (d.weekday() + 1) % 7, 1)
+
+    summer = last_sunday(3) <= now < last_sunday(10)
+    return now + timedelta(hours=2 if summer else 1)
+
+
+def heartbeat_slot(now):
+    """Kontrola „hlídač běží“ v 10:00 a 22:00 (s rezervou na zpoždění GitHubu)."""
+    if 10 <= now.hour < 13:
+        return f"{now:%Y-%m-%d} 10:00"
+    if now.hour >= 22:
+        return f"{now:%Y-%m-%d} 22:00"
+    return None
+
 
 def main():
     config = load_config()
@@ -207,10 +228,19 @@ def main():
     if others:
         notify(config, "Sapa Trip: nový infotrip v listopadu", "; ".join(describe(t) for t in others))
 
+    new_state = dict(state, seen_terms=sorted(seen | {t["id"] for t in terms}))
+
+    now = prague_now()
+    slot = heartbeat_slot(now)
+    if slot and state.get("last_heartbeat") != slot:
+        summary = "; ".join(describe(t) for t in terms) or "zatím žádný volný český infotrip"
+        notify(config, "✅ Sapa hlídač běží",
+               f"Kontrola {now:%d. %m. %H:%M}. Listopad: {summary}.", priority=2)
+        new_state["last_heartbeat"] = slot
+
     # Stav se přepisuje jen při změně (na GitHubu se pak commituje jen tehdy)
-    if new:
-        state = {"seen_terms": sorted(seen | {t["id"] for t in terms})}
-        STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    if new_state != state:
+        STATE_FILE.write_text(json.dumps(new_state, indent=2), encoding="utf-8")
 
 
 if __name__ == "__main__":

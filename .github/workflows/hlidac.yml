@@ -2,7 +2,7 @@ name: Sapa Trip hlídač
 
 on:
   schedule:
-    - cron: "*/15 * * * *"   # každých 15 minut (GitHub může mít pár minut zpoždění)
+    - cron: "*/20 * * * *"   # každých 20 minut (GitHub může mít pár minut zpoždění)
   workflow_dispatch:          # ruční spuštění z webu (záložka Actions)
     inputs:
       test:
@@ -35,4 +35,4 @@ jobs:
           git config user.name "sapa-hlidac"
           git config user.email "sapa-hlidac@users.noreply.github.com"
           git add state.json 2>/dev/null || true
-          git diff --cached --quiet || (git commit -m "Aktualizace stavu" && git push)
+          git diff --cached --quiet || (git commit -m "Aktualizace stavu" && git pull --rebase && git push)
