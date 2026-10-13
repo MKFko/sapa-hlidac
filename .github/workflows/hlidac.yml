@@ -1,40 +1,60 @@
 name: Sapa Trip hlídač
 
+# Jeden běh hlídá ~5,5 hodiny (kontrola každých 5 minut) a pak sám spustí další.
+# Plánovač níže je jen záloha, kdyby se řetěz běhů přerušil.
 on:
   schedule:
-    - cron: "*/5 * * * *"    # každých 5 minut (GitHub může mít pár minut zpoždění)
+    - cron: "*/15 * * * *"
   workflow_dispatch:          # ruční spuštění z webu (záložka Actions)
     inputs:
       test:
-        description: "Poslat zkušební upozornění"
+        description: "Jen poslat zkušební upozornění"
         type: boolean
         default: false
 
 permissions:
-  contents: write
+  contents: write   # ukládání stavu (state.json)
+  actions: write    # spuštění dalšího běhu
 
-concurrency: hlidac
+# Vždy běží jen jeden hlídač, další čeká ve frontě
+concurrency:
+  group: hlidac
+  cancel-in-progress: false
 
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 358
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Kontrola termínů
+      - name: Hlídání termínů
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           EMAIL_USERNAME: ${{ secrets.EMAIL_USERNAME }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
-        run: python sapa_hlidac.py ${{ inputs.test && '--test' || '' }}
-      - name: Uložení stavu (co už bylo ohlášeno)
-        if: always()
         run: |
+          if [ "${{ inputs.test }}" = "true" ]; then
+            python sapa_hlidac.py --test
+            exit 0
+          fi
           git config user.name "sapa-hlidac"
           git config user.email "sapa-hlidac@users.noreply.github.com"
-          git add state.json 2>/dev/null || true
-          git diff --cached --quiet || (git commit -m "Aktualizace stavu" && git pull --rebase && git push)
+          end=$((SECONDS + 330 * 60))
+          while :; do
+            python sapa_hlidac.py || true
+            git add state.json 2>/dev/null || true
+            if ! git diff --cached --quiet; then
+              git commit -qm "Aktualizace stavu" && git pull -q --rebase && git push -q || echo "Uložení stavu selhalo"
+            fi
+            [ "$SECONDS" -ge "$end" ] && break
+            sleep 300
+          done
+      - name: Spuštění dalšího běhu
+        if: ${{ !cancelled() && inputs.test != true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run hlidac.yml --repo "$GITHUB_REPOSITORY" --ref main
