@@ -228,7 +228,8 @@ def main():
     if others:
         notify(config, "Sapa Trip: nový infotrip v listopadu", "; ".join(describe(t) for t in others))
 
-    new_state = dict(state, seen_terms=sorted(seen | {t["id"] for t in terms}))
+    # Pamatuje si jen právě volné termíny – když se termín zaplní a pak uvolní, ohlásí se znovu
+    new_state = dict(state, seen_terms=sorted(t["id"] for t in terms))
 
     now = prague_now()
     slot = heartbeat_slot(now)
