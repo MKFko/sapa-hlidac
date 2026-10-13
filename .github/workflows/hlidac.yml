@@ -2,7 +2,7 @@ name: Sapa Trip hlídač
 
 on:
   schedule:
-    - cron: "*/20 * * * *"   # každých 20 minut (GitHub může mít pár minut zpoždění)
+    - cron: "*/5 * * * *"    # každých 5 minut (GitHub může mít pár minut zpoždění)
   workflow_dispatch:          # ruční spuštění z webu (záložka Actions)
     inputs:
       test:
@@ -26,11 +26,13 @@ jobs:
           python-version: "3.12"
       - name: Kontrola termínů
         env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           EMAIL_USERNAME: ${{ secrets.EMAIL_USERNAME }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
         run: python sapa_hlidac.py ${{ inputs.test && '--test' || '' }}
       - name: Uložení stavu (co už bylo ohlášeno)
+        if: always()
         run: |
           git config user.name "sapa-hlidac"
           git config user.email "sapa-hlidac@users.noreply.github.com"

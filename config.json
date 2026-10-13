@@ -2,7 +2,7 @@
   "year": 2026,
   "month": 11,
   "target_day": 17,
-  "ntfy_topic": "sapa-hlidac-278bdd27971c",
+  "ntfy_topic": "",
   "email": {
     "enabled": false,
     "smtp_host": "smtp.gmail.com",

@@ -244,9 +244,34 @@ def main():
         STATE_FILE.write_text(json.dumps(new_state, indent=2), encoding="utf-8")
 
 
+FAILURE_ALERT_AFTER = 3  # po kolika neúspěšných kontrolách za sebou poslat poplach
+
+
+def track_health(error):
+    """Hlídá chyby: poplach po několika selháních za sebou a zpráva, když se to zase rozběhne."""
+    config = load_config()
+    state = json.loads(STATE_FILE.read_text(encoding="utf-8")) if STATE_FILE.exists() else {}
+    failures = state.get("failures", 0)
+    if error is None:
+        if failures == 0:
+            return
+        if failures >= FAILURE_ALERT_AFTER:
+            notify(config, "✅ Sapa hlídač zase funguje", f"Po {failures} neúspěšných kontrolách už kontrola zase prochází.")
+        del state["failures"]
+    else:
+        state["failures"] = failures + 1
+        if state["failures"] == FAILURE_ALERT_AFTER:
+            notify(config, "⚠️ Sapa hlídač nefunguje",
+                   f"Posledních {FAILURE_ALERT_AFTER} kontrol selhalo. Chyba: {error!r}"[:500], priority=4)
+    STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+
 if __name__ == "__main__":
     try:
         main()
     except Exception as e:
         log(f"CHYBA: {e!r}")
+        track_health(e)
         sys.exit(1)
+    if "--test" not in sys.argv:
+        track_health(None)
