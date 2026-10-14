@@ -1,7 +1,7 @@
 """Hlídač volných termínů Sapa Trip (rezervační systém Reenio).
 
-Kontroluje listopad 2026 a zvlášť 17. 11. Upozorní, když se objeví nový
-český Info Trip s obědem / s brzkou večeří s volným místem. Kanály: Windows notifikace (vždy), ntfy.sh push na
+Hlídá jen 17. 11. 2026. Upozorní, když má český Info Trip s obědem /
+s brzkou večeří aspoň min_free volných míst (config.json). Kanály: Windows notifikace (vždy), ntfy.sh push na
 mobil a e-mail (volitelně, nastavení v config.json).
 
 Spuštění:  python sapa_hlidac.py          (jedna kontrola)
@@ -74,8 +74,8 @@ def api_post(opener, token, path, params):
     return json.loads(opener.open(req, timeout=30).read())["data"]
 
 
-def fetch_terms(year, month, service_ids):
-    """Vrátí termíny hlídaných služeb v daném měsíci: [{day, time, service, free, max}]."""
+def fetch_terms(first, last, service_ids):
+    """Vrátí termíny hlídaných služeb ve dnech first..last: [{day, time, service, free, max}]."""
     cj = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
     opener.addheaders = [("User-Agent", "Mozilla/5.0 (sapa-hlidac)")]
@@ -83,10 +83,10 @@ def fetch_terms(year, month, service_ids):
     token = urllib.parse.unquote(next(c.value for c in cj if c.name == "XSRF-TOKEN"))
 
     terms = []
-    day = date(year, month, 1)
-    while day.month == month:
+    day = first
+    while day <= last:
         # API vrací nejvýš ~8 dní najednou, proto po týdnech
-        end = min(day + timedelta(days=6), date(year + (month == 12), month % 12 + 1, 1) - timedelta(days=1))
+        end = min(day + timedelta(days=6), last)
         data = api_post(opener, token, "/api/Term/List",
                         {"date": day.isoformat(), "endDate": end.isoformat(), "viewMode": "day"})
         for e in data["events"]:
@@ -96,6 +96,8 @@ def fetch_terms(year, month, service_ids):
             # start je v UTC; v listopadu platí v Praze UTC+1
             start = datetime.strptime(e["start"], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=1)
             booked = sum(r["capacity"] for r in e["reservations"])
+            if not first <= start.date() <= last:
+                continue
             terms.append({
                 "id": e["id"],
                 "day": start.date(),
@@ -210,33 +212,32 @@ def main():
         notify(config, "Sapa Trip – test", "Zkušební upozornění, hlídač funguje.")
         return
 
-    year, month, target = config["year"], config["month"], config["target_day"]
-    target_date = date(year, month, target)
+    target_date = date(config["year"], config["month"], config["target_day"])
+    min_free = config.get("min_free", 1)
+    day_label = f"{target_date.day}. {target_date.month}."
 
-    terms = [t for t in fetch_terms(year, month, set(config["service_ids"])) if t["free"] > 0]
+    all_terms = fetch_terms(target_date, target_date, set(config["service_ids"]))
+    terms = [t for t in all_terms if t["free"] >= min_free]
     state = json.loads(STATE_FILE.read_text(encoding="utf-8")) if STATE_FILE.exists() else {}
     seen = set(state.get("seen_terms", []))
     new = [t for t in terms if t["id"] not in seen]
 
-    log("Volné české infotripy {}/{}: {}".format(month, year, "; ".join(describe(t) for t in terms) or "žádné"))
+    log("Infotripy {}: {}".format(day_label, "; ".join(describe(t) for t in all_terms) or "žádné"))
 
-    new_target = [t for t in new if t["day"] == target_date]
-    if new_target:
-        notify(config, f"🎉 Sapa Trip: infotrip {target}. {month}. je volný!",
-               "; ".join(describe(t) for t in new_target) + ". Rychle rezervuj!")
-    others = [t for t in new if t["day"] != target_date]
-    if others:
-        notify(config, "Sapa Trip: nový infotrip v listopadu", "; ".join(describe(t) for t in others))
+    if new:
+        notify(config, f"🎉 Sapa Trip {day_label}: {min_free}+ volných míst!",
+               "; ".join(describe(t) for t in new) + ". Rychle rezervuj!")
 
-    # Pamatuje si jen právě volné termíny – když se termín zaplní a pak uvolní, ohlásí se znovu
+    # Pamatuje si jen termíny, které právě splňují podmínku – když klesnou pod limit a zase stoupnou, ohlásí se znovu
     new_state = dict(state, seen_terms=sorted(t["id"] for t in terms))
 
     now = prague_now()
     slot = heartbeat_slot(now)
     if slot and state.get("last_heartbeat") != slot:
-        summary = "; ".join(describe(t) for t in terms) or "zatím žádný volný český infotrip"
+        summary = "; ".join(describe(t) for t in all_terms) or "zatím žádný český infotrip"
         notify(config, "✅ Sapa hlídač běží",
-               f"Kontrola {now:%d. %m. %H:%M}. Listopad: {summary}.", priority=2)
+               f"Kontrola {now:%d. %m. %H:%M}. Hlídám {day_label}, alert při {min_free}+ volných místech. Teď: {summary}.",
+               priority=2)
         new_state["last_heartbeat"] = slot
 
     # Stav se přepisuje jen při změně (na GitHubu se pak commituje jen tehdy)
